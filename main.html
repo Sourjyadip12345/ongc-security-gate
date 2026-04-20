@@ -1,0 +1,926 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ONGC Installation — Security Gate POB Tracker</title>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
+ 
+<!--
+  ============================================================
+  SETUP INSTRUCTIONS — READ BEFORE USE
+  ============================================================
+ 
+  This page writes live data to your two Google Sheets:
+    1. Manpower Sheet  (ID: 18sV7weOCJJucTXWXKuiktg3JO9CUBWcJiWKLa_a-cMc)
+    2. POB Data Sheet  (ID: 1Gx1YTD5UTSa3KCiumj_kxEJ836Zk7Mw_X0B4Cv5NbMY)
+ 
+  STEP 1 — Create a Google Apps Script Web App
+  ─────────────────────────────────────────────
+  a) Open https://script.google.com
+  b) Click "New Project"
+  c) Replace the code with the Apps Script below (see APPS SCRIPT section)
+  d) Click Deploy → New Deployment → Web App
+  e) Set "Execute as" = Me, "Who has access" = Anyone
+  f) Copy the Web App URL and paste it into APPS_SCRIPT_URL below
+ 
+  APPS SCRIPT (paste this at script.google.com):
+  ───────────────────────────────────────────────
+  const MANPOWER_SHEET_ID = "18sV7weOCJJucTXWXKuiktg3JO9CUBWcJiWKLa_a-cMc";
+  const POB_SHEET_ID      = "1Gx1YTD5UTSa3KCiumj_kxEJ836Zk7Mw_X0B4Cv5NbMY";
+ 
+  function doPost(e) {
+    const data = JSON.parse(e.postData.contents);
+    if (data.action === "updateManpower") updateManpower(data);
+    if (data.action === "updatePOB")      updatePOB(data);
+    return ContentService.createTextOutput(JSON.stringify({ok:true}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+ 
+  function doGet(e) {
+    return ContentService.createTextOutput(JSON.stringify({status:"running"}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+ 
+  function updateManpower(data) {
+    const ss = SpreadsheetApp.openById(MANPOWER_SHEET_ID);
+    const sheet = ss.getSheets()[0];
+    const allValues = sheet.getDataRange().getValues();
+    for (let i = 0; i < allValues.length; i++) {
+      const row = allValues[i];
+      for (let j = 0; j < row.length; j++) {
+        if (String(row[j]).trim() === data.name.trim()) {
+          // Status is in the next column after Mobile
+          sheet.getRange(i+1, j+3).setValue(data.status);
+        }
+      }
+    }
+    // Update totals for the category
+    updateCategoryTotal(sheet, data.category, data.presentCount);
+  }
+ 
+  function updateCategoryTotal(sheet, category, count) {
+    const allValues = sheet.getDataRange().getValues();
+    for (let i = 0; i < allValues.length; i++) {
+      if (String(allValues[i][3]).trim() === "Total Present" &&
+          i > 0 && String(allValues[i-1][4]).trim() !== "") {
+        // Find the right category block by checking header row above
+      }
+      if (String(allValues[i][4]).trim() === "Total Present") {
+        const catHeader = findCategoryHeader(allValues, i, category);
+        if (catHeader) {
+          sheet.getRange(i+1, 5).setValue(count);
+        }
+      }
+    }
+  }
+ 
+  function findCategoryHeader(values, totalRow, category) {
+    for (let i = totalRow; i >= 0; i--) {
+      if (String(values[i][0]).trim().toLowerCase() === category.toLowerCase()) return true;
+    }
+    return false;
+  }
+ 
+  function updatePOB(data) {
+    const ss = SpreadsheetApp.openById(POB_SHEET_ID);
+    const sheet = ss.getSheets()[0];
+    const allValues = sheet.getDataRange().getValues();
+    // Update timestamp
+    sheet.getRange(1,2).setValue(new Date());
+    sheet.getRange(2,2).setValue(Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "d/M/yyyy"));
+    // Update each category count
+    for (let i = 0; i < allValues.length; i++) {
+      const agencyName = String(allValues[i][0]).trim().toLowerCase();
+      for (const [cat, count] of Object.entries(data.counts)) {
+        if (agencyName === cat.toLowerCase()) {
+          sheet.getRange(i+1, 2).setValue(count);
+        }
+      }
+    }
+  }
+ 
+  ============================================================
+-->
+ 
+<style>
+  :root {
+    --bg: #0a0e14;
+    --surface: #111720;
+    --surface2: #182030;
+    --border: #1e2d42;
+    --accent: #00c2ff;
+    --accent2: #ff6b35;
+    --green: #00e676;
+    --red: #ff3d57;
+    --text: #d4e8f7;
+    --muted: #5a7a99;
+  }
+ 
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+ 
+  body {
+    font-family: 'Barlow', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+ 
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,194,255,0.012) 2px, rgba(0,194,255,0.012) 4px);
+    pointer-events: none;
+    z-index: 9999;
+  }
+ 
+  /* HEADER */
+  header {
+    background: linear-gradient(135deg, #0a1525 0%, #0d1e35 100%);
+    border-bottom: 2px solid var(--accent);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 4px 30px rgba(0,194,255,0.15);
+  }
+ 
+  .logo-title {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    line-height: 1;
+  }
+ 
+  .logo-sub {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 3px;
+    margin-top: 2px;
+  }
+ 
+  .sync-status {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid;
+    letter-spacing: 1px;
+    transition: all 0.3s;
+  }
+  .sync-status.idle    { color: var(--muted); border-color: var(--border); }
+  .sync-status.syncing { color: #fbbf24; border-color: #fbbf24; background: rgba(251,191,36,0.08); }
+  .sync-status.ok      { color: var(--green); border-color: var(--green); background: rgba(0,230,118,0.08); }
+  .sync-status.error   { color: var(--red); border-color: var(--red); background: rgba(255,61,87,0.08); }
+ 
+  .clock {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 20px;
+    color: var(--accent);
+    text-align: right;
+  }
+ 
+  .clock-date { font-size: 11px; color: var(--muted); text-align: right; margin-top: 2px; }
+ 
+  /* POB BANNER */
+  .pob-banner {
+    background: linear-gradient(90deg, rgba(0,194,255,0.08), rgba(0,194,255,0.02));
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .pob-banner::-webkit-scrollbar { display: none; }
+ 
+  .pob-label {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+ 
+  .pob-total-box {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: rgba(0,194,255,0.12);
+    border: 1.5px solid var(--accent);
+    border-radius: 6px;
+    padding: 6px 18px;
+  }
+ 
+  .pob-total-num {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1;
+    transition: color 0.3s;
+  }
+ 
+  .pob-total-label { font-size: 11px; color: var(--muted); letter-spacing: 1px; }
+ 
+  .pob-breakdown { display: flex; gap: 12px; flex-wrap: wrap; }
+ 
+  .pob-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-size: 13px;
+    white-space: nowrap;
+    transition: border-color 0.2s;
+  }
+ 
+  .pob-chip-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .pob-chip-count { font-family: 'Share Tech Mono', monospace; font-weight: 600; font-size: 15px; }
+ 
+  /* TABS */
+  .tabs-bar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    display: flex;
+    gap: 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tabs-bar::-webkit-scrollbar { display: none; }
+ 
+  .tab-btn {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    padding: 14px 20px 12px;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    transition: all 0.2s;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { border-bottom-color: var(--accent); }
+  .tab-count {
+    background: var(--border);
+    border-radius: 10px;
+    padding: 1px 7px;
+    font-size: 11px;
+    font-family: 'Share Tech Mono', monospace;
+  }
+  .tab-btn.active .tab-count { background: rgba(0,194,255,0.2); color: var(--accent); }
+ 
+  /* MAIN */
+  .main { padding: 20px 24px; }
+  .category-section { display: none; }
+  .category-section.active { display: block; }
+ 
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+ 
+  .section-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+ 
+  .section-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    box-shadow: 0 0 8px currentColor;
+  }
+ 
+  .section-stats { display: flex; gap: 12px; align-items: center; }
+ 
+  .stat-box {
+    text-align: center;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 16px;
+    min-width: 66px;
+  }
+ 
+  .stat-num { font-family: 'Share Tech Mono', monospace; font-size: 22px; font-weight: 600; line-height: 1; }
+  .stat-num.on { color: var(--green); }
+  .stat-num.off { color: var(--red); }
+  .stat-label { font-size: 10px; color: var(--muted); letter-spacing: 1.5px; margin-top: 2px; }
+ 
+  /* SEARCH */
+  .search-wrap { margin-bottom: 16px; position: relative; }
+  .search-input {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 16px 10px 40px;
+    color: var(--text);
+    font-family: 'Barlow', sans-serif;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .search-input:focus { border-color: var(--accent); }
+  .search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 16px; }
+ 
+  /* GRID */
+  .personnel-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 10px;
+  }
+ 
+  /* CARD */
+  .person-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+    position: relative;
+    overflow: hidden;
+    user-select: none;
+  }
+  .person-card::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--red);
+    transition: background 0.2s;
+  }
+  .person-card.on-site::before { background: var(--green); }
+  .person-card:hover { border-color: rgba(0,194,255,0.3); transform: translateY(-1px); box-shadow: 0 4px 16px rgba(0,0,0,0.3); }
+  .person-card:active { transform: scale(0.98); }
+ 
+  .person-checkbox {
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    border: 2px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.15s;
+    background: var(--surface2);
+  }
+  .person-card.on-site .person-checkbox { background: var(--green); border-color: var(--green); }
+  .check-mark { display: none; font-size: 16px; color: #000; font-weight: 700; }
+  .person-card.on-site .check-mark { display: block; }
+ 
+  .person-info { flex: 1; min-width: 0; }
+  .person-name { font-weight: 600; font-size: 15px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; }
+  .person-meta { font-family: 'Share Tech Mono', monospace; font-size: 11px; color: var(--muted); margin-top: 3px; }
+ 
+  .status-badge {
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 12px; font-weight: 700;
+    letter-spacing: 1.5px;
+    padding: 3px 10px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+  .status-badge.on  { background: rgba(0,230,118,0.12); color: var(--green); border: 1px solid rgba(0,230,118,0.3); }
+  .status-badge.off { background: rgba(255,61,87,0.1);  color: var(--red);   border: 1px solid rgba(255,61,87,0.25); }
+ 
+  /* TOAST */
+  .toast {
+    position: fixed;
+    bottom: 24px; right: 24px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 20px;
+    font-size: 14px;
+    color: var(--text);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    transform: translateY(100px);
+    opacity: 0;
+    transition: all 0.3s cubic-bezier(0.34,1.56,0.64,1);
+    z-index: 1000;
+    max-width: 320px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .toast.toast-in  { border-left: 3px solid var(--green); }
+  .toast.toast-out { border-left: 3px solid var(--red); }
+ 
+  @keyframes pulse-green {
+    0%   { box-shadow: 0 0 0 0   rgba(0,230,118,0.4); }
+    70%  { box-shadow: 0 0 0 8px rgba(0,230,118,0);   }
+    100% { box-shadow: 0 0 0 0   rgba(0,230,118,0);   }
+  }
+  .person-card.just-updated { animation: pulse-green 0.6s ease-out; }
+ 
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+ 
+  .empty-state { text-align: center; padding: 48px; color: var(--muted); font-size: 15px; }
+ 
+  @media (max-width: 600px) {
+    header { padding: 10px 14px; flex-wrap: wrap; gap: 8px; }
+    .pob-banner { padding: 10px 14px; gap: 16px; }
+    .tabs-bar { padding: 0 10px; }
+    .main { padding: 14px; }
+    .logo-title { font-size: 17px; }
+    .clock { font-size: 16px; }
+    .personnel-grid { grid-template-columns: 1fr; }
+    .section-stats { gap: 6px; }
+    .stat-box { padding: 6px 10px; min-width: 54px; }
+  }
+</style>
+</head>
+<body>
+ 
+<header>
+  <div>
+    <div class="logo-title">⬡ ONGC Security</div>
+    <div class="logo-sub">INSTALLATION GATE — POB TRACKING SYSTEM</div>
+  </div>
+  <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <div class="sync-status idle" id="syncStatus">⬤ NOT CONFIGURED</div>
+    <div>
+      <div class="clock" id="clock">--:--:--</div>
+      <div class="clock-date" id="clockDate"></div>
+    </div>
+  </div>
+</header>
+ 
+<!-- POB BANNER -->
+<div class="pob-banner">
+  <div class="pob-label">Total POB</div>
+  <div class="pob-total-box">
+    <div class="pob-total-num" id="totalPOB">0</div>
+    <div class="pob-total-label">PERSONS<br>ON BOARD</div>
+  </div>
+  <div class="pob-breakdown" id="pobBreakdown"></div>
+</div>
+ 
+<!-- TABS -->
+<div class="tabs-bar" id="tabsBar"></div>
+ 
+<!-- MAIN -->
+<div class="main">
+  <div id="sectionsContainer"></div>
+</div>
+ 
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+ 
+<script>
+// ============================================================
+// CONFIGURATION — PASTE YOUR APPS SCRIPT URL HERE
+// ============================================================
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyE8JJtPyU-G63k7Qy0SaCowYCcqUg37XqxTKZPWl2Td4Ds5JzjTrMuOjbk18X3Ka9E/exec";
+//
+// Example:
+// const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycb.../exec";
+//
+// See the SETUP INSTRUCTIONS in the HTML comments above.
+// ============================================================
+ 
+// ============================================================
+// DATA — from your Google Drive Manpower Sheet
+// ============================================================
+const categories = [
+  {
+    id: 'ongc', name: 'ONGC', color: '#00c2ff',
+    sheetKey: 'ONGC',
+    personnel: [
+      { id:'o1',  name:'Sushant Rajput',          mobile:'7710091793', status:'off' },
+      { id:'o2',  name:'R K Patel',               mobile:'9930719360', status:'on'  },
+      { id:'o3',  name:'Hitarth Savant',          mobile:'9428519104', status:'on'  },
+      { id:'o4',  name:'SI Prajapati',            mobile:'9428518285', status:'off' },
+      { id:'o5',  name:'Nitesh Kumar Mishra',     mobile:'9427504350', status:'on'  },
+      { id:'o6',  name:'Lokesh Kumar Khobragade', mobile:'9427504516', status:'on'  },
+      { id:'o7',  name:'Hrishikesh Shyam',        mobile:'8638291399', status:'off' },
+      { id:'o8',  name:'Gunjan Jyoti Bhuyan',     mobile:'8331998747', status:'on'  },
+      { id:'o9',  name:'Sourjyadip Das',          mobile:'8910783567', status:'on'  },
+      { id:'o10', name:'Dhaval A. Patel',         mobile:'9662688321', status:'off' },
+      { id:'o11', name:'Kushal Das',              mobile:'7685988351', status:'on'  },
+      { id:'o12', name:'Bikash Pathori',          mobile:'9435743446', status:'off' },
+      { id:'o13', name:'Achyut Krishna Gogoi',    mobile:'9435992534', status:'off' },
+      { id:'o14', name:'Arnav Bhuyan',            mobile:'9531106414', status:'on'  },
+      { id:'o15', name:'Prasanta Kumar Barman',   mobile:'7099022336', status:'on'  },
+      { id:'o16', name:'Dilip Hazarika',          mobile:'9435992068', status:'off' },
+      { id:'o17', name:'Dipanka Saikia',          mobile:'9435992510', status:'on'  },
+      { id:'o18', name:'Bidinthai Basumatary',    mobile:'8638124647', status:'off' },
+      { id:'o19', name:'Dipu Moni Borah',         mobile:'9706734104', status:'off' },
+      { id:'o20', name:'Aboni Chetia',            mobile:'7099050490', status:'on'  },
+      { id:'o21', name:'Kamal Bhowmick',          mobile:'6901261745', status:'on'  },
+      { id:'o22', name:'Rakesh Baruah',           mobile:'8638440876', status:'off' },
+      { id:'o23', name:'Sourav Jyoti Das',        mobile:'7099013894', status:'off' },
+      { id:'o24', name:'Deepak R Bansi',          mobile:'7506723369', status:'off' },
+      { id:'o25', name:'Kishor B. Sonavane',      mobile:'9428518410', status:'off' },
+      { id:'o26', name:'Gyandeep Tamang',         mobile:'7099013603', status:'on'  },
+      { id:'o27', name:'Champu Kumar Das',         mobile:'7011013443', status:'off' },
+      { id:'o28', name:'Bidyut Jyoti Borah',      mobile:'9854362440', status:'off' },
+      { id:'o29', name:'Bitupan Phukan',          mobile:'7099017902', status:'on'  },
+    ]
+  },
+  {
+    id: 'hal', name: 'HAL', color: '#ff9800',
+    sheetKey: 'Hal',
+    personnel: [
+      { id:'h1',  name:'AMBRESH KUMAR',       mobile:'7710091793', status:'on'  },
+      { id:'h2',  name:'CHITTARANJAN BISWAL', mobile:'9930719360', status:'off' },
+      { id:'h3',  name:'Bhaskar Buragahain',  mobile:'9428519104', status:'on'  },
+      { id:'h4',  name:'SANJIB DAS',          mobile:'9428518285', status:'off' },
+      { id:'h5',  name:'PROTAP SIJALI',       mobile:'9427504350', status:'off' },
+      { id:'h6',  name:'UPENDRA KUMAR MISRA', mobile:'9427504516', status:'on'  },
+      { id:'h7',  name:'RAJIB MORANG',        mobile:'8638291399', status:'off' },
+      { id:'h8',  name:'SHIVA PRASAD SAHOO',  mobile:'8331998747', status:'off' },
+      { id:'h9',  name:'RAHUL NEOG',          mobile:'8910783567', status:'on'  },
+      { id:'h10', name:'NAGENDRA YADAV',      mobile:'9662688321', status:'off' },
+      { id:'h11', name:'AJAY CHETRY',         mobile:'7685988351', status:'off' },
+      { id:'h12', name:'BIMAL KISKU',         mobile:'9435743446', status:'off' },
+      { id:'h13', name:'CHINNA SHYAM',        mobile:'9435992534', status:'off' },
+      { id:'h14', name:'ROBIN HASDA',         mobile:'9531106414', status:'off' },
+      { id:'h15', name:'PRAKASH TOPPO',       mobile:'7099022336', status:'off' },
+      { id:'h16', name:'TARANI BASUMATARY',   mobile:'9435992068', status:'on'  },
+      { id:'h17', name:'PREM TOPPO',          mobile:'9435992510', status:'off' },
+      { id:'h18', name:'Debo Protim Saikia',  mobile:'8638124647', status:'on'  },
+      { id:'h19', name:'Ajit Xalxo',          mobile:'',           status:'on'  },
+      { id:'h20', name:'Buha Boro',           mobile:'',           status:'on'  },
+    ]
+  },
+  {
+    id: 'aap', name: 'AAP', color: '#a78bfa',
+    sheetKey: 'AAP',
+    personnel: [
+      { id:'a1', name:'Kalpajyoti Sonowal',  mobile:'', status:'on'  },
+      { id:'a2', name:'Tridip Sonowal',       mobile:'', status:'off' },
+      { id:'a3', name:'Prabin Moran',         mobile:'', status:'off' },
+      { id:'a4', name:'Amit Dhan',            mobile:'', status:'off' },
+      { id:'a5', name:'Abinash Basumatary',   mobile:'', status:'off' },
+      { id:'a6', name:'Jonok Nath',           mobile:'', status:'on'  },
+      { id:'a7', name:'Shiv Kumar Goswami',   mobile:'', status:'on'  },
+      { id:'a8', name:'G Medhi',              mobile:'', status:'off' },
+    ]
+  },
+  {
+    id: 'drivers', name: 'Drivers', color: '#f472b6',
+    sheetKey: 'Drivers',
+    personnel: [
+      { id:'d1', name:'B Basumatary', mobile:'', status:'on'  },
+      { id:'d2', name:'Kapil',        mobile:'', status:'off' },
+      { id:'d3', name:'Loki',         mobile:'', status:'on'  },
+      { id:'d4', name:'Nath',         mobile:'', status:'on'  },
+      { id:'d5', name:'Dipen',        mobile:'', status:'off' },
+      { id:'d6', name:'Pyne',         mobile:'', status:'on'  },
+      { id:'d7', name:'Ali',          mobile:'', status:'off' },
+    ]
+  },
+  {
+    id: 'upkeeping', name: 'Up-keeping', color: '#34d399',
+    sheetKey: 'Up-keeping',
+    personnel: [
+      { id:'u1', name:'DOMNICK BARLA', mobile:'', status:'on' },
+      { id:'u2', name:'BHARAT CHETRY', mobile:'', status:'on' },
+      { id:'u3', name:'Liton Haldar',  mobile:'', status:'on' },
+    ]
+  },
+  {
+    id: 'housekeeping', name: 'House-keeping', color: '#fbbf24',
+    sheetKey: 'House-keeping',
+    personnel: [
+      { id:'hk1', name:'Rafel Minj',     mobile:'', status:'on' },
+      { id:'hk2', name:'Bijoy Karmakar', mobile:'', status:'on' },
+    ]
+  },
+  {
+    id: 'canteen', name: 'Canteen', color: '#60a5fa',
+    sheetKey: 'Canteen',
+    personnel: [
+      { id:'c1', name:'Gagan Kurmi', mobile:'', status:'on'  },
+      { id:'c2', name:'Pradhan',     mobile:'', status:'on'  },
+      { id:'c3', name:'Gokul',       mobile:'', status:'on'  },
+      { id:'c4', name:'Thapa',       mobile:'', status:'on'  },
+      { id:'c5', name:'Juna',        mobile:'', status:'off' },
+    ]
+  }
+];
+ 
+// ============================================================
+// STATE (localStorage persistence between page reloads)
+// ============================================================
+function loadState() {
+  try {
+    const saved = localStorage.getItem('pob_state_v2');
+    if (!saved) return;
+    const state = JSON.parse(saved);
+    categories.forEach(cat => {
+      cat.personnel.forEach(p => {
+        if (state[p.id] !== undefined) p.status = state[p.id];
+      });
+    });
+  } catch(e) {}
+}
+ 
+function saveState() {
+  const state = {};
+  categories.forEach(cat => cat.personnel.forEach(p => { state[p.id] = p.status; }));
+  localStorage.setItem('pob_state_v2', JSON.stringify(state));
+}
+ 
+loadState();
+ 
+// ============================================================
+// GOOGLE SHEETS SYNC
+// ============================================================
+let syncQueue = [];
+let isSyncing = false;
+const syncEl = document.getElementById('syncStatus');
+ 
+function setSyncStatus(state, msg) {
+  syncEl.className = 'sync-status ' + state;
+  syncEl.textContent = msg;
+}
+ 
+// Check if URL is configured
+function isConfigured() {
+  return APPS_SCRIPT_URL && APPS_SCRIPT_URL !== "PASTE_YOUR_WEB_APP_URL_HERE";
+}
+ 
+async function pushToSheets(person, cat) {
+  if (!isConfigured()) {
+    setSyncStatus('error', '⚠ URL NOT SET');
+    return;
+  }
+ 
+  // Build POB counts map (maps sheetKey to category)
+  const pobCounts = {};
+  categories.forEach(c => {
+    pobCounts[c.sheetKey] = countOn(c);
+  });
+ 
+  // Queue both updates
+  syncQueue.push({
+    action: 'updateManpower',
+    name: person.name,
+    status: person.status === 'on' ? 'On' : 'Off',
+    category: cat.sheetKey,
+    presentCount: countOn(cat)
+  });
+  syncQueue.push({
+    action: 'updatePOB',
+    counts: pobCounts
+  });
+ 
+  processQueue();
+}
+ 
+async function processQueue() {
+  if (isSyncing || syncQueue.length === 0) return;
+  isSyncing = true;
+  setSyncStatus('syncing', '↑ SYNCING...');
+ 
+  while (syncQueue.length > 0) {
+    const payload = syncQueue.shift();
+    try {
+      const resp = await fetch(APPS_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(payload)
+      });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    } catch(e) {
+      setSyncStatus('error', '✗ SYNC FAILED');
+      syncQueue.unshift(payload); // requeue
+      isSyncing = false;
+      setTimeout(processQueue, 5000); // retry after 5s
+      return;
+    }
+  }
+ 
+  isSyncing = false;
+  setSyncStatus('ok', '✓ SYNCED');
+  setTimeout(() => {
+    if (!isSyncing) setSyncStatus('idle', '⬤ READY');
+  }, 3000);
+}
+ 
+// ============================================================
+// CLOCK
+// ============================================================
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent = now.toLocaleTimeString('en-IN', { hour12: false });
+  document.getElementById('clockDate').textContent = now.toLocaleDateString('en-IN', {
+    weekday: 'short', day: '2-digit', month: 'short', year: 'numeric'
+  });
+}
+updateClock();
+setInterval(updateClock, 1000);
+ 
+// ============================================================
+// COUNTS
+// ============================================================
+function countOn(cat) { return cat.personnel.filter(p => p.status === 'on').length; }
+function totalPOB()   { return categories.reduce((s, c) => s + countOn(c), 0); }
+ 
+// ============================================================
+// RENDER POB BANNER
+// ============================================================
+function renderPOBBanner() {
+  document.getElementById('totalPOB').textContent = totalPOB();
+  document.getElementById('pobBreakdown').innerHTML = categories.map(cat => `
+    <div class="pob-chip">
+      <div class="pob-chip-dot" style="background:${cat.color}"></div>
+      <span style="color:var(--muted);font-size:12px">${cat.name}</span>
+      <span class="pob-chip-count" style="color:${cat.color}">${countOn(cat)}</span>
+    </div>`).join('');
+}
+ 
+// ============================================================
+// TABS
+// ============================================================
+let activeTab = categories[0].id;
+ 
+function renderTabs() {
+  document.getElementById('tabsBar').innerHTML = categories.map(cat => `
+    <button class="tab-btn ${cat.id === activeTab ? 'active' : ''}"
+            onclick="switchTab('${cat.id}')"
+            style="${cat.id === activeTab ? `color:${cat.color};border-bottom-color:${cat.color}` : ''}">
+      ${cat.name}
+      <span class="tab-count">${countOn(cat)}</span>
+    </button>`).join('');
+}
+ 
+function switchTab(id) {
+  activeTab = id;
+  document.querySelectorAll('.category-section').forEach(el => el.classList.remove('active'));
+  document.getElementById('sec-' + id)?.classList.add('active');
+  renderTabs();
+  const inp = document.querySelector('#sec-' + id + ' .search-input');
+  if (inp) { inp.value = ''; filterPersonnel('', id); }
+}
+ 
+// ============================================================
+// RENDER SECTIONS
+// ============================================================
+function renderSections() {
+  document.getElementById('sectionsContainer').innerHTML = categories.map(cat => `
+    <div class="category-section ${cat.id === activeTab ? 'active' : ''}" id="sec-${cat.id}">
+      <div class="section-header">
+        <div class="section-title" style="color:${cat.color}">
+          <div class="section-dot" style="background:${cat.color};color:${cat.color}"></div>
+          ${cat.name}
+        </div>
+        <div class="section-stats">
+          <div class="stat-box">
+            <div class="stat-num on" id="onCount-${cat.id}">${countOn(cat)}</div>
+            <div class="stat-label">ON SITE</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-num off" id="offCount-${cat.id}">${cat.personnel.length - countOn(cat)}</div>
+            <div class="stat-label">OFF SITE</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-num" style="color:var(--muted)">${cat.personnel.length}</div>
+            <div class="stat-label">TOTAL</div>
+          </div>
+        </div>
+      </div>
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input class="search-input" type="text" placeholder="Search personnel..." oninput="filterPersonnel(this.value,'${cat.id}')">
+      </div>
+      <div class="personnel-grid" id="grid-${cat.id}">
+        ${cat.personnel.map(p => personCardHTML(p, cat)).join('')}
+      </div>
+    </div>`).join('');
+}
+ 
+function personCardHTML(p, cat) {
+  const isOn = p.status === 'on';
+  return `
+    <div class="person-card ${isOn ? 'on-site' : ''}" id="card-${p.id}" onclick="togglePerson('${p.id}','${cat.id}')">
+      <div class="person-checkbox">
+        <span class="check-mark">✓</span>
+      </div>
+      <div class="person-info">
+        <div class="person-name">${p.name}</div>
+        <div class="person-meta">${p.mobile ? '📱 ' + p.mobile : 'No mobile registered'}</div>
+      </div>
+      <div class="status-badge ${isOn ? 'on' : 'off'}" id="badge-${p.id}">${isOn ? 'ON' : 'OFF'}</div>
+    </div>`;
+}
+ 
+// ============================================================
+// TOGGLE — updates UI + pushes to Google Sheets
+// ============================================================
+function togglePerson(personId, catId) {
+  const cat = categories.find(c => c.id === catId);
+  const p   = cat.personnel.find(x => x.id === personId);
+  p.status  = p.status === 'on' ? 'off' : 'on';
+  const isOn = p.status === 'on';
+ 
+  const card = document.getElementById('card-' + personId);
+  isOn ? card.classList.add('on-site') : card.classList.remove('on-site');
+  card.classList.remove('just-updated');
+  void card.offsetWidth;
+  card.classList.add('just-updated');
+ 
+  const badge = document.getElementById('badge-' + personId);
+  badge.textContent = isOn ? 'ON' : 'OFF';
+  badge.className = 'status-badge ' + (isOn ? 'on' : 'off');
+ 
+  updateCounts(cat);
+  renderPOBBanner();
+  renderTabs();
+  saveState();
+ 
+  // Push to Google Sheets
+  pushToSheets(p, cat);
+ 
+  showToast(p.name, isOn, cat);
+}
+ 
+function updateCounts(cat) {
+  const on = countOn(cat);
+  document.getElementById('onCount-' + cat.id).textContent = on;
+  document.getElementById('offCount-' + cat.id).textContent = cat.personnel.length - on;
+}
+ 
+// ============================================================
+// SEARCH / FILTER
+// ============================================================
+function filterPersonnel(query, catId) {
+  const cat = categories.find(c => c.id === catId);
+  const q   = query.toLowerCase().trim();
+  const grid = document.getElementById('grid-' + catId);
+  const list = q ? cat.personnel.filter(p => p.name.toLowerCase().includes(q) || p.mobile.includes(q)) : cat.personnel;
+  grid.innerHTML = list.length
+    ? list.map(p => personCardHTML(p, cat)).join('')
+    : '<div class="empty-state">No personnel found.</div>';
+}
+ 
+// ============================================================
+// TOAST
+// ============================================================
+let toastTimer;
+function showToast(name, isOn, cat) {
+  const toast = document.getElementById('toast');
+  toast.className = 'toast ' + (isOn ? 'toast-in' : 'toast-out');
+  toast.innerHTML = `
+    <span style="font-size:20px">${isOn ? '✅' : '🔴'}</span>
+    <div>
+      <div style="font-weight:600;font-size:14px">${name}</div>
+      <div style="font-size:12px;color:var(--muted)">${cat.name} · ${isOn ? 'Entered Installation' : 'Exited Installation'}</div>
+    </div>`;
+  toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 3200);
+}
+ 
+// ============================================================
+// INIT
+// ============================================================
+renderSections();
+renderTabs();
+renderPOBBanner();
+setSyncStatus(isConfigured() ? 'idle' : 'error',
+              isConfigured() ? '⬤ READY' : '⚠ URL NOT SET');
+</script>
+</body>
+</html>
